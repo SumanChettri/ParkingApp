@@ -1,10 +1,37 @@
 const express = require("express");
+const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
 const { verifyAndOpenGate } = require("../services/gateService");
+const { verifyOtp } = require("../services/otpService");
 
 const router = express.Router();
 
 const VACATED_SENSOR_GRACE_MS = 15000;
+
+async function findBookingByOtp({ otp, gate }) {
+  const type = gate === "exit" ? "exit" : "entry";
+  const now = new Date();
+  const statusFilter = type === "entry" ? "booked" : "entered";
+  const hashField = type === "entry" ? "entryOtpHash" : "exitOtpHash";
+
+  const candidates = await Booking.find({
+    status: statusFilter,
+    otpExpiresAt: { $gt: now },
+    [hashField]: { $nin: ["", null] }
+  })
+    .sort({ createdAt: -1 })
+    .limit(30);
+
+  for (const b of candidates) {
+    const hash = b[hashField];
+    // OTP is bcrypt-hashed; compare against active candidates.
+    // Candidate pool is small (active bookings), so this remains fast.
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await verifyOtp(String(otp || ""), hash);
+    if (ok) return b;
+  }
+  return null;
+}
 
 router.post("/sensor", async (req, res) => {
   const { sensorId, isOccupied } = req.body;
@@ -35,11 +62,22 @@ router.post("/sensor", async (req, res) => {
 
 router.post("/keypad", async (req, res) => {
   const { bookingId, otp, gate } = req.body;
+  if (!otp || !gate || !["entry", "exit"].includes(gate)) {
+    return res.status(400).json({ message: "otp and gate (entry|exit) are required" });
+  }
   try {
-    await verifyAndOpenGate({ bookingId, otp, type: gate });
+    let resolvedBookingId = bookingId;
+    if (!resolvedBookingId) {
+      const match = await findBookingByOtp({ otp, gate });
+      if (!match) return res.status(404).json({ message: "No active booking matches this OTP" });
+      resolvedBookingId = String(match._id);
+    }
+
+    await verifyAndOpenGate({ bookingId: resolvedBookingId, otp, type: gate });
     res.json({
       success: true,
       gate,
+      bookingId: resolvedBookingId,
       servoCommand: "open",
       message: `${gate} gate open signal ready for ESP`
     });
