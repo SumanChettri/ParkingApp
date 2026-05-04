@@ -9,6 +9,9 @@ const { issueEntryOtpForBooking, issueExitOtpForBooking } = require("../services
 const router = express.Router();
 
 const MIN_RAZORPAY_INR = 100;
+function allowFakePayment() {
+  return String(process.env.ALLOW_FAKE_PAYMENT_METHODS || "true").toLowerCase() !== "false";
+}
 
 function verifyRazorpaySignature(orderId, paymentId, signature) {
   const secret = process.env.RAZORPAY_KEY_SECRET;
@@ -65,11 +68,12 @@ router.post("/create-order", async (req, res) => {
           amount: 0,
           currency: paymentCurrency(),
           quote,
+          allowFakePayment: allowFakePayment(),
           message: "No overstay fee — use Get exit code instead."
         });
       }
       if (booking.exitPaid) {
-        return res.json({ alreadyPaid: true, skipPayment: true, phase: "exit", quote });
+        return res.json({ alreadyPaid: true, skipPayment: true, phase: "exit", quote, allowFakePayment: allowFakePayment() });
       }
 
       const currency = paymentCurrency();
@@ -88,7 +92,9 @@ router.post("/create-order", async (req, res) => {
           amount: amountMinor,
           currency,
           phase,
-          quote
+          quote,
+          allowFakePayment: allowFakePayment(),
+          testMode: true
         });
       }
 
@@ -131,13 +137,14 @@ router.post("/create-order", async (req, res) => {
         phase,
         quote,
         businessName: process.env.RAZORPAY_BUSINESS_NAME || "Smart Parking",
-        testMode: String(process.env.RAZORPAY_KEY_ID || "").startsWith("rzp_test_")
+        testMode: String(process.env.RAZORPAY_KEY_ID || "").startsWith("rzp_test_"),
+        allowFakePayment: allowFakePayment()
       });
     }
 
     /* phase === entry */
     if (booking.entryPaid) {
-      return res.json({ alreadyPaid: true, skipPayment: true });
+      return res.json({ alreadyPaid: true, skipPayment: true, allowFakePayment: allowFakePayment() });
     }
 
     const currency = paymentCurrency();
@@ -157,7 +164,9 @@ router.post("/create-order", async (req, res) => {
         amount: amountMinor,
         currency,
         phase,
-        quote: null
+        quote: null,
+        allowFakePayment: allowFakePayment(),
+        testMode: true
       });
     }
 
@@ -200,7 +209,8 @@ router.post("/create-order", async (req, res) => {
       phase,
       quote: null,
       businessName: process.env.RAZORPAY_BUSINESS_NAME || "Smart Parking",
-      testMode: String(process.env.RAZORPAY_KEY_ID || "").startsWith("rzp_test_")
+      testMode: String(process.env.RAZORPAY_KEY_ID || "").startsWith("rzp_test_"),
+      allowFakePayment: allowFakePayment()
     });
   } catch (err) {
     console.error(err);
@@ -210,13 +220,35 @@ router.post("/create-order", async (req, res) => {
 
 router.post("/verify", async (req, res) => {
   try {
-    const { bookingId, phase, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    const { bookingId, phase, razorpay_order_id, razorpay_payment_id, razorpay_signature, fakeSuccess, fakeMethod } = req.body || {};
     if (!bookingId || !["entry", "exit"].includes(phase)) {
       return res.status(400).json({ message: "bookingId and phase required" });
     }
 
     const booking = await Booking.findById(bookingId);
     if (!booking) return res.status(404).json({ message: "Booking not found" });
+
+    if (fakeSuccess && allowFakePayment()) {
+      if (phase === "entry") {
+        if (!booking.entryPaid) {
+          booking.entryPaid = true;
+          await issueEntryOtpForBooking(booking);
+          await booking.save();
+        }
+        return res.json({ ok: true, fake: true, method: fakeMethod || "test" });
+      }
+      if (booking.status !== "entered") {
+        return res.status(400).json({ message: "Vehicle must complete entry before exit payment" });
+      }
+      const quote = computeExitQuote(booking);
+      if (quote.breakdown.totalMinor <= 0 || booking.exitPaid) {
+        return res.json({ ok: true, fake: true, method: fakeMethod || "test" });
+      }
+      booking.exitPaid = true;
+      await issueExitOtpForBooking(booking);
+      await booking.save();
+      return res.json({ ok: true, fake: true, method: fakeMethod || "test" });
+    }
 
     if (skipPayment()) {
       if (phase === "entry") {
