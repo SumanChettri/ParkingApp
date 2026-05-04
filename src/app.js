@@ -22,6 +22,14 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/payments", paymentRouter);
 app.use("/api/iot", iotRoutes);
 
+app.get("/api/test", (req, res) => {
+  res.json({
+    success: true,
+    message: "Backend working",
+    time: new Date().toISOString()
+  });
+});
+
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 const server = createServer(app);
