@@ -60,9 +60,14 @@ function clearPendingEntryMemory() {
   pendingEntry = null;
 }
 
-/** Admin / bench test: same shape as app-driven open so ESP8266 polling sees a token. */
+/** Admin / bench test: entry ESP sees token + open */
 function forceAdminEntryGateSignal() {
   pendingEntry = makePending("000000000000000000000001");
+}
+
+/** Admin / bench: exit ESP sees token + open like a real OTP unlock. */
+function forceAdminExitGateSignal() {
+  pendingExit = makePending("000000000000000000000002");
 }
 
 module.exports = {
@@ -74,5 +79,6 @@ module.exports = {
   consumePendingExitGate: (token) => consumePending("exit", token),
   clearPendingExitMemory,
   clearPendingEntryMemory,
-  forceAdminEntryGateSignal
+  forceAdminEntryGateSignal,
+  forceAdminExitGateSignal
 };

@@ -24,7 +24,7 @@ async function optionalAuth(req, res, next) {
     const user = await User.findById(payload.sub).select("-passwordHash");
     if (user) req.user = user;
   } catch {
-    /* invalid token — ignore for optional */
+    /* invalid token */
   }
   next();
 }
@@ -46,12 +46,58 @@ async function requireAuth(req, res, next) {
   }
 }
 
-/** JWT role admin, or trusted admin header (same key as bay reset). */
-function requireAdmin(req, res, next) {
-  if (req.user?.role === "admin") return next();
-  const k = process.env.ADMIN_RESET_KEY;
-  if (k && req.header("x-admin-reset-key") === k) return next();
-  return res.status(403).json({ message: "Admin only" });
+/** Header / body / query for staff dashboard routes (optional if JWT admin). */
+function getProvidedAdminKey(req) {
+  const h = String(req.get("x-admin-reset-key") || req.header("x-admin-reset-key") || "").trim();
+  if (h) return h;
+  const b = req.body && typeof req.body === "object" ? req.body.adminKey : undefined;
+  if (b != null && String(b).trim()) return String(b).trim();
+  const q = req.query?.adminKey;
+  if (q != null && String(q).trim()) return String(q).trim();
+  return "";
 }
 
-module.exports = { signUser, optionalAuth, requireAuth, requireAdmin, jwtSecret };
+function configuredAdminResetKey() {
+  return String(process.env.ADMIN_RESET_KEY || "").trim();
+}
+
+/** JWT admin, or ADMIN_RESET_KEY when set. */
+function requireAdmin(req, res, next) {
+  if (req.user?.role === "admin") return next();
+  const expected = configuredAdminResetKey();
+  if (expected && getProvidedAdminKey(req) === expected) return next();
+  return res.status(403).json({ message: "Admin only (JWT admin or ADMIN_RESET_KEY)." });
+}
+
+/** Dedicated key for POST /api/slots/reset-bays only (see BAY_RESET_KEY in .env). */
+function getProvidedBayResetKey(req) {
+  const h = String(req.get("x-bay-reset-key") || req.header("x-bay-reset-key") || "").trim();
+  if (h) return h;
+  const b = req.body && typeof req.body === "object" ? req.body.bayResetKey : undefined;
+  if (b != null && String(b).trim()) return String(b).trim();
+  const q = req.query?.bayResetKey;
+  if (q != null && String(q).trim()) return String(q).trim();
+  return "";
+}
+
+function configuredBayResetKey() {
+  return String(process.env.BAY_RESET_KEY || "").trim();
+}
+
+/** Clear-all-bays: must match BAY_RESET_KEY in production; in dev allows if key unset. */
+function bayResetKeyMatches(req) {
+  const expected = configuredBayResetKey();
+  if (!expected) return process.env.NODE_ENV !== "production";
+  return getProvidedBayResetKey(req) === expected;
+}
+
+module.exports = {
+  signUser,
+  optionalAuth,
+  requireAuth,
+  requireAdmin,
+  jwtSecret,
+  getProvidedAdminKey,
+  getProvidedBayResetKey,
+  bayResetKeyMatches
+};

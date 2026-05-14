@@ -3,20 +3,16 @@ const Slot = require("../models/Slot");
 const Booking = require("../models/Booking");
 const iotStateService = require("../services/iotStateService");
 const { clearPendingEntryMemory, clearPendingExitMemory } = require("../services/iotAppGateQueue");
+const { bayResetKeyMatches } = require("../middleware/auth");
 
 const router = express.Router();
 
-function canResetBays(req) {
-  const k = process.env.ADMIN_RESET_KEY;
-  if (k) return req.header("x-admin-reset-key") === k;
-  return process.env.NODE_ENV !== "production";
-}
-
 /** Dev / admin: frees every bay — fixes stuck “everything booked” test data */
 router.post("/reset-bays", async (req, res) => {
-  if (!canResetBays(req)) {
+  if (!bayResetKeyMatches(req)) {
     return res.status(403).json({
-      message: "Forbidden. Set ADMIN_RESET_KEY in backend/.env and send header x-admin-reset-key, or run outside production."
+      message:
+        "Forbidden. Set BAY_RESET_KEY on the server. Send header x-bay-reset-key or JSON { \"bayResetKey\": \"...\" } (production requires a key)."
     });
   }
   await Slot.updateMany({}, { $set: { state: "free", vacatedAt: null, lastSensorState: false } });

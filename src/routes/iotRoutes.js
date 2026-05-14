@@ -138,6 +138,7 @@ router.get("/entry-gate-pending", async (req, res) => {
       out.token = mem.token;
       out.bookingId = mem.bookingId;
     }
+    if (open && !out.token) out.token = "pending";
     res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message || "pending check failed" });
@@ -167,6 +168,7 @@ router.get("/exit-gate-pending", async (req, res) => {
       out.token = mem.token;
       out.bookingId = mem.bookingId;
     }
+    if (open && !out.token) out.token = "pending";
     res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message || "pending check failed" });

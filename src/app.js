@@ -16,7 +16,14 @@ const { router: paymentRouter } = require("./routes/paymentRoutes");
 const { seedIotStateIfMissing } = require("./services/iotStateService");
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-reset-key", "x-bay-reset-key"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+  })
+);
 
 app.use(express.json());
 
@@ -31,7 +38,9 @@ app.get("/api/test", (req, res) => {
   res.json({
     success: true,
     message: "Backend working",
-    time: new Date().toISOString()
+    time: new Date().toISOString(),
+    env: process.env.NODE_ENV || "development",
+    bayResetConfigured: Boolean(String(process.env.BAY_RESET_KEY || "").trim())
   });
 });
 

@@ -1,12 +1,13 @@
 const express = require("express");
 const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
-const { requireAdmin } = require("../middleware/auth");
+const { requireAdmin, optionalAuth } = require("../middleware/auth");
 const iotStateService = require("../services/iotStateService");
-const { forceAdminEntryGateSignal } = require("../services/iotAppGateQueue");
+const { forceAdminEntryGateSignal, forceAdminExitGateSignal } = require("../services/iotAppGateQueue");
 
 const router = express.Router();
 
+router.use(optionalAuth);
 router.use(requireAdmin);
 
 router.get("/bookings", async (req, res) => {
@@ -61,6 +62,8 @@ router.get("/dashboard", async (req, res) => {
 
 router.post("/gate/trigger", async (req, res) => {
   try {
+    // Queue a token so ESP32 polling always sees { open, token } (same as driver OTP flow).
+    forceAdminExitGateSignal();
     await iotStateService.setExitGatePending(true);
     res.json({ ok: true, exitGatePending: true });
   } catch (err) {
