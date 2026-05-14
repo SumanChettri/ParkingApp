@@ -1,6 +1,8 @@
 const express = require("express");
 const Slot = require("../models/Slot");
 const Booking = require("../models/Booking");
+const iotStateService = require("../services/iotStateService");
+const { clearPendingEntryMemory, clearPendingExitMemory } = require("../services/iotAppGateQueue");
 
 const router = express.Router();
 
@@ -31,6 +33,9 @@ router.post("/reset-bays", async (req, res) => {
       }
     }
   );
+  clearPendingEntryMemory();
+  clearPendingExitMemory();
+  await iotStateService.resetIotHardwareState();
   const slots = await Slot.find().sort({ slotNumber: 1 });
   res.json({ ok: true, message: "All bays marked free and active sessions cancelled.", slots });
 });

@@ -52,7 +52,7 @@ function validateBookingState(booking, isEntry) {
   }
 }
 
-async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp = false }) {
+async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp: _legacy = false }) {
   const { isEntry, isExit } = validateGateType(type);
   const booking = await Booking.findById(bookingId);
   if (!booking) {
@@ -94,15 +94,15 @@ async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp 
   }
   await booking.save();
 
-  if (queueRemoteOpenFromApp) {
-    if (isEntry) signalEntryGateAfterAppVerify(booking._id);
-    if (isExit) signalExitGateAfterAppVerify(booking._id);
-  }
-
+  // ESP firmware polls /entry-gate-pending and /exit-gate-pending and expects a
+  // short-lived token in JSON. Always queue it for keypad *and* app verification,
+  // otherwise Mongo-only flags never satisfy the entry device's token check.
   if (isEntry) {
+    signalEntryGateAfterAppVerify(booking._id);
     await iotStateService.setEntryGatePending(true);
   }
   if (isExit) {
+    signalExitGateAfterAppVerify(booking._id);
     await iotStateService.setExitGatePending(true);
   }
 

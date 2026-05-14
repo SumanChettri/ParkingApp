@@ -63,6 +63,28 @@ async function seedIotStateIfMissing() {
   if (n === 0) await IotState.create({ key: IOT_SINGLETON_KEY });
 }
 
+/** Dev/admin reset: clears gate flags and cached IR snapshot on the singleton doc. */
+async function resetIotHardwareState() {
+  await IotState.findOneAndUpdate(
+    { key: IOT_SINGLETON_KEY },
+    {
+      $set: {
+        exitGatePending: false,
+        entryGatePending: false,
+        ir1: false,
+        ir2: false,
+        ir3: false,
+        ir4: false,
+        ir5: false,
+        ir6: false,
+        irFreeCount: 6,
+        irUsedCount: 0
+      }
+    },
+    { upsert: true, new: true }
+  );
+}
+
 module.exports = {
   getDoc,
   setExitGatePending,
@@ -71,5 +93,6 @@ module.exports = {
   clearExitGatePending,
   clearEntryGatePending,
   recalcIrCounts,
-  seedIotStateIfMissing
+  seedIotStateIfMissing,
+  resetIotHardwareState
 };

@@ -3,6 +3,7 @@ const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
 const { requireAdmin } = require("../middleware/auth");
 const iotStateService = require("../services/iotStateService");
+const { forceAdminEntryGateSignal } = require("../services/iotAppGateQueue");
 
 const router = express.Router();
 
@@ -64,6 +65,16 @@ router.post("/gate/trigger", async (req, res) => {
     res.json({ ok: true, exitGatePending: true });
   } catch (err) {
     res.status(500).json({ message: err.message || "Trigger failed" });
+  }
+});
+
+router.post("/gate/trigger-entry", async (req, res) => {
+  try {
+    forceAdminEntryGateSignal();
+    await iotStateService.setEntryGatePending(true);
+    res.json({ ok: true, entryGatePending: true });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Entry trigger failed" });
   }
 });
 
