@@ -3,37 +3,60 @@ const Slot = require("../models/Slot");
 const Booking = require("../models/Booking");
 const iotStateService = require("../services/iotStateService");
 const { clearPendingEntryMemory, clearPendingExitMemory } = require("../services/iotAppGateQueue");
-const { bayResetKeyMatches } = require("../middleware/auth");
 
 const router = express.Router();
 
-/** Dev / admin: frees every bay — fixes stuck “everything booked” test data */
+/**
+ * TEST/DEMO endpoint (OPEN): Clears all bays and cancels active bookings.
+ * No ADMIN_RESET_KEY, no auth, no environment key dependency.
+ */
 router.post("/reset-bays", async (req, res) => {
-  if (!bayResetKeyMatches(req)) {
-    return res.status(403).json({
-      message:
-        "Forbidden. Set BAY_RESET_KEY on the server. Send header x-bay-reset-key or JSON { \"bayResetKey\": \"...\" } (production requires a key)."
+  try {
+    console.log("[slotRoutes] /api/slots/reset-bays called (open reset)");
+
+    // 1) Reset slots
+    await Slot.updateMany(
+      {},
+      { $set: { state: "free", vacatedAt: null, lastSensorState: false } }
+    );
+
+    // 2) Cancel active/queued bookings that could block UI/flows
+    await Booking.updateMany(
+      { status: { $in: ["booked", "entered"] } },
+      {
+        $set: {
+          status: "cancelled",
+          entryOtpHash: "",
+          exitOtpHash: "",
+          demoEntryOtp: "",
+          demoExitOtp: "",
+          otpExpiresAt: new Date()
+        }
+      }
+    );
+
+    // 3) Clear any in-memory gate queue state
+    clearPendingEntryMemory();
+    clearPendingExitMemory();
+
+    // 4) Reset cached IOT singleton hardware state
+    await iotStateService.resetIotHardwareState();
+
+    const slots = await Slot.find().sort({ slotNumber: 1 });
+
+    res.json({
+      success: true,
+      message: "All bays cleared",
+      slots
+    });
+  } catch (err) {
+    console.error("[slotRoutes] reset-bays failed:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to clear bays",
+      error: err?.message || String(err)
     });
   }
-  await Slot.updateMany({}, { $set: { state: "free", vacatedAt: null, lastSensorState: false } });
-  await Booking.updateMany(
-    { status: { $in: ["booked", "entered"] } },
-    {
-      $set: {
-        status: "cancelled",
-        entryOtpHash: "",
-        exitOtpHash: "",
-        demoEntryOtp: "",
-        demoExitOtp: "",
-        otpExpiresAt: new Date()
-      }
-    }
-  );
-  clearPendingEntryMemory();
-  clearPendingExitMemory();
-  await iotStateService.resetIotHardwareState();
-  const slots = await Slot.find().sort({ slotNumber: 1 });
-  res.json({ ok: true, message: "All bays marked free and active sessions cancelled.", slots });
 });
 
 router.get("/", async (req, res) => {
@@ -42,3 +65,4 @@ router.get("/", async (req, res) => {
 });
 
 module.exports = router;
+
