@@ -5,6 +5,18 @@ const {
   signalEntryGateAfterAppVerify,
   signalExitGateAfterAppVerify
 } = require("./iotAppGateQueue");
+const iotStateService = require("./iotStateService");
+
+/** ₹20/hour, minimum one billable hour, rounded up (e.g. 70 min → 2 hours). */
+function computeFlatExitFarePaise(booking, exitAt) {
+  const enteredAt = booking.actualEnteredAt ? new Date(booking.actualEnteredAt) : null;
+  if (!enteredAt) return { minutes: null, farePaise: null };
+  const ms = Math.max(0, exitAt.getTime() - enteredAt.getTime());
+  const minutes = Math.max(1, Math.ceil(ms / 60000));
+  const billableHours = Math.max(1, Math.ceil(minutes / 60));
+  const HOURLY_PAISE = 2000; // ₹20 in paise
+  return { minutes, farePaise: billableHours * HOURLY_PAISE };
+}
 
 function validateGateType(type) {
   const isEntry = type === "entry";
@@ -71,6 +83,9 @@ async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp 
     booking.entryOtpHash = "";
     booking.demoEntryOtp = "";
   } else {
+    const { minutes, farePaise } = computeFlatExitFarePaise(booking, now);
+    booking.exitDurationMinutes = minutes;
+    booking.exitFarePaise = farePaise;
     booking.status = "exited";
     booking.actualExitedAt = now;
     booking.exitOtpUsedAt = now;
@@ -82,6 +97,13 @@ async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp 
   if (queueRemoteOpenFromApp) {
     if (isEntry) signalEntryGateAfterAppVerify(booking._id);
     if (isExit) signalExitGateAfterAppVerify(booking._id);
+  }
+
+  if (isEntry) {
+    await iotStateService.setEntryGatePending(true);
+  }
+  if (isExit) {
+    await iotStateService.setExitGatePending(true);
   }
 
   const slot = await Slot.findOne({ slotNumber: booking.slotNumber });
@@ -101,7 +123,9 @@ async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp 
     status: booking.status,
     entryPaid: booking.entryPaid,
     exitPaid: booking.exitPaid,
-    otpExpiresAt: booking.otpExpiresAt
+    otpExpiresAt: booking.otpExpiresAt,
+    exitFarePaise: booking.exitFarePaise,
+    exitDurationMinutes: booking.exitDurationMinutes
   };
 }
 

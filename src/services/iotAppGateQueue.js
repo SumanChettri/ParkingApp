@@ -52,11 +52,21 @@ function consumePending(kind, token) {
   return true;
 }
 
+function clearPendingExitMemory() {
+  pendingExit = null;
+}
+
+function clearPendingEntryMemory() {
+  pendingEntry = null;
+}
+
 module.exports = {
   signalEntryGateAfterAppVerify,
   signalExitGateAfterAppVerify,
   peekPendingEntryGate: () => peekPending("entry"),
   peekPendingExitGate: () => peekPending("exit"),
   consumePendingEntryGate: (token) => consumePending("entry", token),
-  consumePendingExitGate: (token) => consumePending("exit", token)
+  consumePendingExitGate: (token) => consumePending("exit", token),
+  clearPendingExitMemory,
+  clearPendingEntryMemory
 };

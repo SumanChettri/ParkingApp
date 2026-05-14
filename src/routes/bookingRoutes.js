@@ -2,7 +2,9 @@ const express = require("express");
 const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
 const { verifyAndOpenGate } = require("../services/gateService");
-const { issueExitOtpForBooking } = require("../services/otpIssueService");
+const { issueExitOtpForBooking, issueEntryOtpForBooking } = require("../services/otpIssueService");
+const { optionalAuth, requireAuth } = require("../middleware/auth");
+const { skipPayment } = require("../services/paymentConfig");
 const {
   otpBufferAfterEndMs,
   VEHICLE_TYPES,
@@ -38,6 +40,7 @@ async function allocateSlotAtomically(preferredSlot) {
 
 function sanitizeBooking(b) {
   if (!b) return null;
+  const paymentStatus = b.entryPaid ? "paid" : "unpaid";
   return {
     bookingId: b._id,
     slotNumber: b.slotNumber,
@@ -51,7 +54,10 @@ function sanitizeBooking(b) {
     email: b.email,
     entryPaid: Boolean(b.entryPaid),
     exitPaid: Boolean(b.exitPaid),
+    paymentStatus,
     otpExpiresAt: b.otpExpiresAt,
+    exitDurationMinutes: b.exitDurationMinutes != null ? b.exitDurationMinutes : null,
+    exitFarePaise: b.exitFarePaise != null ? b.exitFarePaise : null,
     demo: {
       entryOtp: b.entryPaid && b.demoEntryOtp ? b.demoEntryOtp : null,
       exitOtp: b.status === "entered" && b.demoExitOtp ? b.demoExitOtp : null
@@ -94,6 +100,87 @@ router.get("/pricing", (req, res) => {
     visitTotalsByDurationMinor,
     durationRateHints
   });
+});
+
+router.get("/my", requireAuth, async (req, res) => {
+  try {
+    const list = await Booking.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(50);
+    res.json(list.map(sanitizeBooking));
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Could not load bookings" });
+  }
+});
+
+router.post("/:bookingId/cancel", requireAuth, async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.bookingId);
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    const owns =
+      (booking.userId && String(booking.userId) === String(req.user._id)) ||
+      (!booking.userId && booking.email && booking.email.toLowerCase() === req.user.email.toLowerCase());
+    if (!owns) return res.status(403).json({ message: "Not your booking" });
+    if (booking.status !== "booked") {
+      return res.status(400).json({ message: "Only unpaid reservations (status booked) can be cancelled this way" });
+    }
+    booking.status = "cancelled";
+    booking.entryOtpHash = "";
+    booking.exitOtpHash = "";
+    booking.demoEntryOtp = "";
+    booking.demoExitOtp = "";
+    await booking.save();
+    await Slot.updateOne({ slotNumber: booking.slotNumber }, { $set: { state: "free", vacatedAt: null } });
+    res.json({ ok: true, booking: sanitizeBooking(booking) });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Cancel failed" });
+  }
+});
+
+router.post("/:bookingId/pay", requireAuth, async (req, res) => {
+  try {
+    const phase = String(req.body?.phase || "entry").toLowerCase();
+    const booking = await Booking.findById(req.params.bookingId);
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    const owns =
+      (booking.userId && String(booking.userId) === String(req.user._id)) ||
+      (!booking.userId && booking.email && booking.email.toLowerCase() === req.user.email.toLowerCase());
+    if (!owns) return res.status(403).json({ message: "Not your booking" });
+
+    const allowDemo =
+      skipPayment() || String(process.env.ALLOW_FAKE_PAYMENT_METHODS || "true").toLowerCase() !== "false";
+
+    if (phase === "entry") {
+      if (booking.entryPaid) return res.json({ ok: true, booking: sanitizeBooking(booking) });
+      if (!allowDemo) {
+        return res.status(402).json({ message: "Use the payment flow to complete entry payment" });
+      }
+      booking.entryPaid = true;
+      await issueEntryOtpForBooking(booking);
+      await booking.save();
+      return res.json({ ok: true, booking: sanitizeBooking(booking) });
+    }
+
+    if (phase === "exit") {
+      if (booking.status !== "entered") {
+        return res.status(400).json({ message: "Vehicle must complete entry before exit payment" });
+      }
+      if (booking.exitPaid) return res.json({ ok: true, booking: sanitizeBooking(booking) });
+      if (!allowDemo) {
+        return res.status(402).json({ message: "Use the payment flow for overstay" });
+      }
+      const quote = computeExitQuote(booking);
+      if (quote.breakdown.totalMinor <= 0) {
+        return res.json({ ok: true, booking: sanitizeBooking(booking), message: "No overstay fee" });
+      }
+      booking.exitPaid = true;
+      await issueExitOtpForBooking(booking);
+      await booking.save();
+      return res.json({ ok: true, booking: sanitizeBooking(booking) });
+    }
+
+    return res.status(400).json({ message: "phase must be entry or exit" });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Pay failed" });
+  }
 });
 
 /** Issue exit OTP when leaving: free if within booked window + grace; otherwise requires overstay payment first. */
@@ -150,7 +237,7 @@ router.get("/:bookingId", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", optionalAuth, async (req, res) => {
   const { vehicleType, preferredSlot, durationMins = 60, email = "", name = "Guest", vehicleNumber = "" } = req.body || {};
 
   if (!vehicleType || !VEHICLE_TYPES.includes(vehicleType)) {
@@ -184,7 +271,7 @@ router.post("/", async (req, res) => {
 
   let booking;
   try {
-    booking = await Booking.create({
+    const createPayload = {
       name: String(name || "Guest").trim() || "Guest",
       email: String(email || "").trim(),
       vehicleNumber: normalizedVehicleNumber,
@@ -200,7 +287,9 @@ router.post("/", async (req, res) => {
       demoExitOtp: "",
       entryPaid: false,
       exitPaid: false
-    });
+    };
+    if (req.user) createPayload.userId = req.user._id;
+    booking = await Booking.create(createPayload);
   } catch (err) {
     await Slot.updateOne({ _id: freeSlot._id }, { $set: { state: "free", vacatedAt: null } });
     if (err?.code === 11000 && String(err?.message || "").includes("vehicleNumber")) {

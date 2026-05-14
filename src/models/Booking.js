@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const bookingSchema = new mongoose.Schema(
   {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     name: { type: String, default: "Guest" },
     email: { type: String, default: "" },
     vehicleNumber: { type: String, required: true, unique: true, trim: true, uppercase: true },
@@ -33,7 +34,10 @@ const bookingSchema = new mongoose.Schema(
     razorpayEntryPaymentId: { type: String, default: "" },
     razorpayExitPaymentId: { type: String, default: "" },
     actualEnteredAt: { type: Date, default: null },
-    actualExitedAt: { type: Date, default: null }
+    actualExitedAt: { type: Date, default: null },
+    /** Flat exit fare (₹20/hr ceiling) stored when vehicle exits via gate — for receipts / IoT audit */
+    exitDurationMinutes: { type: Number, default: null },
+    exitFarePaise: { type: Number, default: null }
   },
   { timestamps: true }
 );

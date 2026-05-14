@@ -7,8 +7,11 @@ const {
   peekPendingEntryGate,
   consumePendingEntryGate,
   peekPendingExitGate,
-  consumePendingExitGate
+  consumePendingExitGate,
+  clearPendingEntryMemory,
+  clearPendingExitMemory
 } = require("../services/iotAppGateQueue");
+const iotStateService = require("../services/iotStateService");
 
 const router = express.Router();
 
@@ -77,38 +80,105 @@ async function findBookingByOtp({ otp, gate }) {
   return null;
 }
 
-/** ESP8266 entry module: poll after driver verifies entry OTP in the mobile app. */
-router.get("/entry-gate-pending", (req, res) => {
+/** Aggregated slot map for dashboards / ESP polling */
+router.get("/slots", async (req, res) => {
   try {
-    res.json(peekPendingEntryGate());
+    const slots = await Slot.find().sort({ slotNumber: 1 });
+    const freeSlots = slots.filter((s) => s.state === "free").length;
+    const bookedSlots = slots.filter((s) => s.state === "reserved").length;
+    const shaped = slots.map((s) => ({
+      slotNumber: s.slotNumber,
+      state: s.state,
+      sensorId: s.sensorId,
+      lastSensorState: Boolean(s.lastSensorState)
+    }));
+    res.json({ freeSlots, bookedSlots, slots: shaped });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "slots failed" });
+  }
+});
+
+/** Bulk IR line update from ESP (ir1..ir6 === bay occupied when true). */
+router.post("/ir-update", async (req, res) => {
+  try {
+    const body = req.body || {};
+    await iotStateService.updateIrFromBody(body);
+
+    for (let i = 1; i <= 6; i += 1) {
+      const k = `ir${i}`;
+      if (typeof body[k] !== "boolean") continue;
+      const occ = body[k];
+      const slot = await Slot.findOne({ slotNumber: i });
+      if (!slot || slot.state === "reserved") continue;
+      slot.lastSensorState = occ;
+      slot.state = occ ? "occupied" : "free";
+      if (!occ) slot.vacatedAt = null;
+      await slot.save();
+    }
+
+    const doc = await iotStateService.getDoc();
+    res.json({
+      success: true,
+      irFreeCount: doc.irFreeCount,
+      irUsedCount: doc.irUsedCount
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "ir-update failed" });
+  }
+});
+
+/** ESP8266 entry: merge in-memory app token + Mongo IotState.entryGatePending */
+router.get("/entry-gate-pending", async (req, res) => {
+  try {
+    const mem = peekPendingEntryGate();
+    const doc = await iotStateService.getDoc();
+    const open = Boolean(mem.open || doc.entryGatePending);
+    const out = { open, entryGatePending: doc.entryGatePending };
+    if (mem.open && mem.token) {
+      out.token = mem.token;
+      out.bookingId = mem.bookingId;
+    }
+    res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message || "pending check failed" });
   }
 });
 
-router.post("/entry-gate-ack", (req, res) => {
+router.post("/entry-gate-ack", async (req, res) => {
   try {
-    const ok = consumePendingEntryGate(req.body?.token);
-    if (!ok) return res.status(400).json({ ok: false, message: "invalid or expired token" });
+    await iotStateService.clearEntryGatePending();
+    const token = req.body?.token;
+    if (token) consumePendingEntryGate(token);
+    clearPendingEntryMemory();
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: err.message || "ack failed" });
   }
 });
 
-/** ESP32 exit module: poll after driver verifies exit OTP in the mobile app. */
-router.get("/exit-gate-pending", (req, res) => {
+/** ESP32 exit: merge in-memory app token + Mongo IotState.exitGatePending */
+router.get("/exit-gate-pending", async (req, res) => {
   try {
-    res.json(peekPendingExitGate());
+    const mem = peekPendingExitGate();
+    const doc = await iotStateService.getDoc();
+    const open = Boolean(mem.open || doc.exitGatePending);
+    const out = { open, exitGatePending: doc.exitGatePending };
+    if (mem.open && mem.token) {
+      out.token = mem.token;
+      out.bookingId = mem.bookingId;
+    }
+    res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message || "pending check failed" });
   }
 });
 
-router.post("/exit-gate-ack", (req, res) => {
+router.post("/exit-gate-ack", async (req, res) => {
   try {
-    const ok = consumePendingExitGate(req.body?.token);
-    if (!ok) return res.status(400).json({ ok: false, message: "invalid or expired token" });
+    await iotStateService.clearExitGatePending();
+    const token = req.body?.token;
+    if (token) consumePendingExitGate(token);
+    clearPendingExitMemory();
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: err.message || "ack failed" });
@@ -177,7 +247,9 @@ router.post("/keypad", async (req, res) => {
       message: `${gate} gate open signal ready for ESP`
     });
   } catch (err) {
-    res.status(err.status || 500).json({ message: err.message || "Keypad verification failed" });
+    let status = err.status || 500;
+    if (status === 402 || status === 404) status = 401;
+    res.status(status).json({ message: err.message || "Keypad verification failed" });
   }
 });
 
