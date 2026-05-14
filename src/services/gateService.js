@@ -1,6 +1,10 @@
 const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
 const { verifyOtp } = require("./otpService");
+const {
+  signalEntryGateAfterAppVerify,
+  signalExitGateAfterAppVerify
+} = require("./iotAppGateQueue");
 
 function validateGateType(type) {
   const isEntry = type === "entry";
@@ -36,8 +40,8 @@ function validateBookingState(booking, isEntry) {
   }
 }
 
-async function verifyAndOpenGate({ bookingId, otp, type }) {
-  const { isEntry } = validateGateType(type);
+async function verifyAndOpenGate({ bookingId, otp, type, queueRemoteOpenFromApp = false }) {
+  const { isEntry, isExit } = validateGateType(type);
   const booking = await Booking.findById(bookingId);
   if (!booking) {
     const err = new Error("Booking not found");
@@ -74,6 +78,11 @@ async function verifyAndOpenGate({ bookingId, otp, type }) {
     booking.demoExitOtp = "";
   }
   await booking.save();
+
+  if (queueRemoteOpenFromApp) {
+    if (isEntry) signalEntryGateAfterAppVerify(booking._id);
+    if (isExit) signalExitGateAfterAppVerify(booking._id);
+  }
 
   const slot = await Slot.findOne({ slotNumber: booking.slotNumber });
   if (slot) {

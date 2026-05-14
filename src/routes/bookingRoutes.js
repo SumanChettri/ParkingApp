@@ -228,8 +228,14 @@ router.post("/", async (req, res) => {
 router.post("/:bookingId/verify", async (req, res) => {
   const { bookingId } = req.params;
   const { otp, type } = req.body || {};
+  const fromApp = Boolean(req.body?.fromApp);
   try {
-    const result = await verifyAndOpenGate({ bookingId, otp, type });
+    const result = await verifyAndOpenGate({
+      bookingId,
+      otp,
+      type,
+      queueRemoteOpenFromApp: fromApp
+    });
     res.json({ ...result, gate: type, action: "open" });
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message || "Verification failed" });

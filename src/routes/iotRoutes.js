@@ -3,6 +3,12 @@ const Booking = require("../models/Booking");
 const Slot = require("../models/Slot");
 const { verifyAndOpenGate } = require("../services/gateService");
 const { verifyOtp } = require("../services/otpService");
+const {
+  peekPendingEntryGate,
+  consumePendingEntryGate,
+  peekPendingExitGate,
+  consumePendingExitGate
+} = require("../services/iotAppGateQueue");
 
 const router = express.Router();
 
@@ -70,6 +76,44 @@ async function findBookingByOtp({ otp, gate }) {
   }
   return null;
 }
+
+/** ESP8266 entry module: poll after driver verifies entry OTP in the mobile app. */
+router.get("/entry-gate-pending", (req, res) => {
+  try {
+    res.json(peekPendingEntryGate());
+  } catch (err) {
+    res.status(500).json({ message: err.message || "pending check failed" });
+  }
+});
+
+router.post("/entry-gate-ack", (req, res) => {
+  try {
+    const ok = consumePendingEntryGate(req.body?.token);
+    if (!ok) return res.status(400).json({ ok: false, message: "invalid or expired token" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "ack failed" });
+  }
+});
+
+/** ESP32 exit module: poll after driver verifies exit OTP in the mobile app. */
+router.get("/exit-gate-pending", (req, res) => {
+  try {
+    res.json(peekPendingExitGate());
+  } catch (err) {
+    res.status(500).json({ message: err.message || "pending check failed" });
+  }
+});
+
+router.post("/exit-gate-ack", (req, res) => {
+  try {
+    const ok = consumePendingExitGate(req.body?.token);
+    if (!ok) return res.status(400).json({ ok: false, message: "invalid or expired token" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "ack failed" });
+  }
+});
 
 router.post("/sensor", async (req, res) => {
   try {
