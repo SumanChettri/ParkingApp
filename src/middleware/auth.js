@@ -91,6 +91,23 @@ function bayResetKeyMatches(req) {
   return getProvidedBayResetKey(req) === expected;
 }
 
+/**
+ * POST /api/slots/reset-bays — accepts the same secret sent as bay OR admin headers/body
+ * (covers legacy servers that only checked ADMIN_RESET_KEY, and apps that send one or both).
+ */
+function clearBaysKeyMatches(req) {
+  const bayExpected = configuredBayResetKey();
+  const adminExpected = configuredAdminResetKey();
+  if (!bayExpected && !adminExpected) {
+    return process.env.NODE_ENV !== "production";
+  }
+  const secret = String(getProvidedBayResetKey(req) || getProvidedAdminKey(req) || "").trim();
+  if (!secret) return false;
+  if (bayExpected && secret === bayExpected) return true;
+  if (adminExpected && secret === adminExpected) return true;
+  return false;
+}
+
 module.exports = {
   signUser,
   optionalAuth,
@@ -99,5 +116,6 @@ module.exports = {
   jwtSecret,
   getProvidedAdminKey,
   getProvidedBayResetKey,
-  bayResetKeyMatches
+  bayResetKeyMatches,
+  clearBaysKeyMatches
 };
